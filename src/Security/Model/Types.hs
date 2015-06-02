@@ -28,6 +28,7 @@ module Security.Model.Types
         Credential(..),
         Entity(..),
         AuthenticationMechanism(..),
+        Identity(..),
         -- * Security context
         SecurityContext(..),
         securityContextEntity,
@@ -42,18 +43,33 @@ module Security.Model.Types
         validateUsername,
         validatePassword,
         validateTimestamp,
-        validateToken
+        validateToken,
+        -- * Permissions
+        PermissionName(..),
+        Permission(..),
+        permissionImplied,
+        -- * Roles
+        Rolename(..),
+        Role(..)
        ) where
 
 import Data.Text(Text)
 import qualified Data.Text as T
 import Data.Time.Clock(UTCTime, getCurrentTime)
+import Data.Map(Map)
+import qualified Data.Set as Set
+import Data.Set(Set)
+import Control.Applicative
+import Control.Monad
 
 class SecurityBackend a where
   supportedMechanisms :: a -> [AuthenticationMechanism]
   userNameToUserId :: a -> Username -> IO (Either SecurityError UserId)
   verifyUserPassword :: a -> SecurityContext -> Claim -> Username -> Password -> IO (Either SecurityError ())
   verifyTotp :: a -> SecurityContext -> Claim -> Timestamp -> TotpToken -> IO (Either SecurityError ())
+  userRoles :: a -> SecurityContext -> UserId -> IO (Either SecurityError [Role])
+  rolePermissions :: a -> SecurityContext -> Role -> IO (Either SecurityError [Permission])
+  roleParents :: a -> SecurityContext -> Role -> IO (Either SecurityError [Role])
 
 data SecuritySystem = forall b. SecurityBackend b => SecuritySystem b
 
@@ -87,7 +103,7 @@ newtype TotpToken = TotpToken Text
 -- | Internal identifier for users.
 --
 newtype UserId = UserId Text
-  deriving (Eq, Show)
+  deriving (Eq, Ord, Show)
 
 -- | Internal identifier for services.
 --
@@ -123,13 +139,18 @@ data AuthenticationMechanism
   | AuthenticationTotp
   deriving (Eq, Show)
 
+data Identity = Identity Entity
+  deriving (Eq, Show)
+
 data SecurityContext
   = SecurityContext {
+    authenticatedIdentity :: Identity,
     authenticatedEntity :: Entity,
     authenticatedThrough :: AuthenticationMechanism,
     authenticatedThroughAll :: [AuthenticationMechanism],
     authenticationTimestamp :: Timestamp,
-    authenticationInheritedContext :: SecurityContext
+    authenticationInheritedContext :: SecurityContext,
+    roles :: [Role]
     }
   | SecurityContextNone
   deriving (Eq, Show)
@@ -151,6 +172,7 @@ data SecurityError
   | SecurityContextMissing
   | UnsupportedAuthenticationMechanism
   | InvalidValue Text
+  | Unauthorized
   deriving (Eq, Show)
 
 claimToEntity :: Claim -> Entity
@@ -177,6 +199,27 @@ validateToken (TotpToken token) act
   | T.length token /= 6 = validateError (InvalidValue "TOTP token")
   | otherwise = act
 
-
 validateError :: SecurityError -> IO (Either SecurityError a)
 validateError err = return $ Left err
+
+newtype PermissionName = PermissionName Text
+  deriving (Eq, Show)
+
+data Permission = Permission PermissionName
+  deriving (Eq, Show)
+
+permissionImplied :: Permission -> Permission -> Bool
+permissionImplied p1 p2 = False
+
+data Rolename = Rolename Text
+  deriving (Eq, Ord, Show)
+           
+data Role = Role {
+  roleName :: Rolename
+  }
+  deriving (Eq, Ord, Show)
+
+data Rolemap = Rolemap {
+  rolemapIdentityRoles :: Map Identity [Rolename],
+  rolemapRoles :: Map Rolename Role
+  }

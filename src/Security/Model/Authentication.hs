@@ -17,8 +17,6 @@ module Security.Model.Authentication
         totpAuthenticate) where
 
 import Security.Model.Types
-import Security.Model.Backend.Test
-
 
 -- | 'verifyClaim' makes sure that the given claim is valid by testing
 -- the given credential in connection with the given
@@ -43,12 +41,15 @@ authenticate secSystem inhSecCtxt now claim credential = do
   case eRes of
     Left err -> return $ Left err
     Right _ -> do
-      let secCtxt = SecurityContext {
-            authenticatedEntity = claimToEntity claim,
+      let entity = claimToEntity claim
+          secCtxt = SecurityContext {
+            authenticatedIdentity = Identity entity,
+            authenticatedEntity = entity,
             authenticatedThrough = credentialToMechanism credential,
             authenticatedThroughAll = [credentialToMechanism credential] ++ securityContextMechanisms inhSecCtxt,
             authenticationTimestamp = now,
-            authenticationInheritedContext = inhSecCtxt
+            authenticationInheritedContext = inhSecCtxt,
+            roles = []
             }
       return $ Right secCtxt
 
