@@ -19,72 +19,59 @@ import Security.Model.Types
 import Data.Set(Set)
 import qualified Data.Set as Set
 import Control.Monad
+import Control.Applicative
 
+-- | Ensure that the given security context has at least the given
+-- permissions. If not, return an error. Otherwise, invoke the given
+-- action and return it's result.
+--
 authorize :: SecuritySystem ->
              SecurityContext ->
              [Permission] ->
-             (SecuritySystem -> SecurityContext -> IO (Either SecurityError a)) ->
+             (SecurityContext -> Security a) ->
              IO (Either SecurityError a)
-authorize secSys secCtxt@SecurityContext{..} reqPerms action =
+authorize secSys secCtxt reqPerms action =
+  runSecurity (authorize' secCtxt reqPerms action) secSys
+
+authorize' :: SecurityContext ->
+             [Permission] ->
+             (SecurityContext -> Security a) ->
+             Security a
+authorize' secCtxt@SecurityContext{..} reqPerms action =
   case authenticatedIdentity of
     Identity (EntityUser userId) -> do
-      ePerms <- userPermissions secSys secCtxt userId
-      case ePerms of
-        Left err -> return $ Left err
-        Right perms -> do
-          let allowed = all (\ p -> p `elem` perms) reqPerms
-          if allowed
-            then action secSys secCtxt
-            else return $ Left Unauthorized
-    _ -> return $ Left Unauthorized
+      perms <- userPermissions secCtxt userId
+      let allowed = all (\ p -> p `elem` perms) reqPerms
+      if allowed
+        then action secCtxt
+        else raiseSecurityError Unauthorized
+    _ -> raiseSecurityError Unauthorized
   
-
-closeRoles :: SecuritySystem -> SecurityContext -> [Role] -> IO (Either SecurityError [Role])
-closeRoles secSystem@(SecuritySystem sys) secCtxt roles = do
-  eRoles <- go (Set.fromList roles)
-  case eRoles of
-    Left err -> return $ Left err
-    Right roles ->
-      return $ Right (Set.toList roles)
+-- | Calculate the transitive closure of roles, as given by the role
+-- inheritance relation of the security system.
+--
+closeRoles :: SecurityContext -> [Role] -> Security [Role]
+closeRoles secCtxt roles = do
+  Set.toList <$> go (Set.fromList roles)
  where
-   go :: Set Role -> IO (Either SecurityError (Set Role))
+   go :: Set Role -> Security (Set Role)
    go roles = do
-     eParents <- foldM (\ acc role -> do
-                           case acc of
-                             Left err -> return $ Left err
-                             Right parents -> do
-                               e <- roleParents sys secCtxt role
-                               case e of
-                                 Left err -> return $ Left err
-                                 Right eP ->
-                                   return $ Right (eP ++ parents)) (Right []) (Set.toList roles)
-     case eParents of
-       Left err -> return $ Left err
-       Right parents -> do
-         let roles' = roles `Set.union` Set.fromList parents
-         if roles' /= roles
-           then go roles'
-           else return $ Right roles
-   
-userPermissions :: SecuritySystem -> SecurityContext -> UserId -> IO (Either SecurityError [Permission])
-userPermissions secSystem@(SecuritySystem sys) secCtxt userId = do
-  euRoles <- userRoles sys secCtxt userId
-  case euRoles of
-    Left err -> return $ Left err
-    Right uRoles -> do
-      eRoles <- closeRoles secSystem secCtxt uRoles
-      case eRoles of
-        Left err -> return $ Left err
-        Right roles -> do
-          ePerms <- foldM (\ acc role -> do
-                              case acc of
-                                Left err -> return $ Left err
-                                Right oldPerms -> do
-                                  ep <- rolePermissions sys secCtxt role
-                                  case ep of
-                                    Left err -> return $ Left err
-                                    Right p -> return $ Right $  p ++ oldPerms)
-                    (Right [])
-                    roles
-          return ePerms
+     SecuritySystem sys <- getSecuritySystem
+     parents <- mapM (\ role -> liftIOtoSecurity $ roleParents sys secCtxt role)
+                (Set.toList roles)
+     let roles' = roles `Set.union` Set.fromList (concat parents)
+     if roles' /= roles
+       then go roles'
+       else return roles
+
+-- | Calculate the list of permissions of the given user.
+--
+userPermissions :: SecurityContext -> UserId -> Security [Permission]
+userPermissions secCtxt userId = do
+  SecuritySystem sys <- getSecuritySystem
+  uRoles <- liftIOtoSecurity $ userRoles sys secCtxt userId
+  roles <- closeRoles secCtxt uRoles
+  ePerms <- mapM (\  role ->  liftIOtoSecurity $ rolePermissions sys secCtxt role)
+            roles
+  return $ concat ePerms
       

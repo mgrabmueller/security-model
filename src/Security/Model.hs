@@ -44,15 +44,15 @@ test = do
   let secSys = pwTotpSecuritySystem
   Right sc <- passwordAuthenticate secSys now username password
   res@(Left Unauthorized) <- authorize secSys sc [Permission (PermissionName "killimp")]
-                             (\ _ _ -> return $ Right True)
+                             (\ _ -> return True)
   res@(Right True) <- authorize secSys sc [Permission (PermissionName "flipswitch")]
-                      (\ _ _ -> return $ Right True)
+                      (\ _ -> return True)
   res@(Left Unauthorized) <- authorize secSys sc [Permission (PermissionName "killimp"),
                                                   Permission (PermissionName "flipswitch")]
-                             (\ _ _ -> return $ Right True)
+                             (\ _ -> return $ Right True)
   res@(Right True) <- authorize secSys sc [Permission (PermissionName "compile"),
                                            Permission (PermissionName "flipswitch")]
-                      (\ _ _ -> return $ Right True)
+                      (\ _ -> return True)
   return ()
 
 

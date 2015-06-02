@@ -1,6 +1,7 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 --------------------------------------------------------------------------
 -- |
 -- Module:      Security.Model.Types
@@ -16,6 +17,11 @@ module Security.Model.Types
        (-- * Security Backend
         SecurityBackend(..),
         SecuritySystem(..),
+        -- * Security Monad
+        Security(..),
+        getSecuritySystem,
+        raiseSecurityError,
+        liftIOtoSecurity,
         -- * Basic types
         Username(..),
         Password(..),
@@ -61,6 +67,46 @@ import qualified Data.Set as Set
 import Data.Set(Set)
 import Control.Applicative
 import Control.Monad
+
+newtype Security a = Security {runSecurity :: SecuritySystem -> IO (Either SecurityError a)}
+
+instance Functor Security where
+  fmap f x = Security (\ sys -> do
+                          r <- runSecurity x sys
+                          case r of
+                            Left err -> return $ Left err
+                            Right x -> return $ Right $ f x)
+             
+instance Applicative Security where
+  pure x = Security (\ _ -> return $ Right x)
+  f <*> x = Security (\ sys -> do
+             f' <- runSecurity f sys
+             case f' of
+               Left err -> return $ Left err
+               Right f'' -> do
+                 x' <- runSecurity x sys
+                 case x' of
+                   Left err -> return $ Left err
+                   Right x'' ->
+                     return $ Right $ f'' x'')
+
+instance Monad Security where
+  return = pure
+  x >>= f = Security (\ sys -> do
+             x' <- runSecurity x sys
+             case x' of
+               Left err -> return $ Left err
+               Right x'' ->
+                 runSecurity (f x'') sys)
+
+getSecuritySystem :: Security SecuritySystem
+getSecuritySystem = Security (\ sys -> return $ Right sys)
+
+raiseSecurityError :: SecurityError -> Security a
+raiseSecurityError err = Security (\ _ -> return $ Left err)
+
+liftIOtoSecurity :: IO (Either SecurityError a) -> Security a
+liftIOtoSecurity io = Security (\ _ -> io)
 
 class SecurityBackend a where
   supportedMechanisms :: a -> [AuthenticationMechanism]
