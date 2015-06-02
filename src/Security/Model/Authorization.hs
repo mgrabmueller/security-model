@@ -31,16 +31,16 @@ authorize :: SecuritySystem ->
              (SecurityContext -> Security a) ->
              IO (Either SecurityError a)
 authorize secSys secCtxt reqPerms action =
-  runSecurity (authorize' secCtxt reqPerms action) secSys
+  runSecurity (authorize' reqPerms action) secSys secCtxt
 
-authorize' :: SecurityContext ->
-             [Permission] ->
+authorize' :: [Permission] ->
              (SecurityContext -> Security a) ->
              Security a
-authorize' secCtxt@SecurityContext{..} reqPerms action =
+authorize' reqPerms action = do
+  secCtxt@SecurityContext{..} <- getSecurityContext
   case authenticatedIdentity of
     Identity (EntityUser userId) -> do
-      perms <- userPermissions secCtxt userId
+      perms <- userPermissions userId
       let allowed = all (\ p -> p `elem` perms) reqPerms
       if allowed
         then action secCtxt
@@ -50,13 +50,14 @@ authorize' secCtxt@SecurityContext{..} reqPerms action =
 -- | Calculate the transitive closure of roles, as given by the role
 -- inheritance relation of the security system.
 --
-closeRoles :: SecurityContext -> [Role] -> Security [Role]
-closeRoles secCtxt roles = do
+closeRoles :: [Role] -> Security [Role]
+closeRoles roles = do
   Set.toList <$> go (Set.fromList roles)
  where
    go :: Set Role -> Security (Set Role)
    go roles = do
      SecuritySystem sys <- getSecuritySystem
+     secCtxt <- getSecurityContext
      parents <- mapM (\ role -> liftIOtoSecurity $ roleParents sys secCtxt role)
                 (Set.toList roles)
      let roles' = roles `Set.union` Set.fromList (concat parents)
@@ -66,11 +67,12 @@ closeRoles secCtxt roles = do
 
 -- | Calculate the list of permissions of the given user.
 --
-userPermissions :: SecurityContext -> UserId -> Security [Permission]
-userPermissions secCtxt userId = do
+userPermissions :: UserId -> Security [Permission]
+userPermissions userId = do
   SecuritySystem sys <- getSecuritySystem
+  secCtxt <- getSecurityContext
   uRoles <- liftIOtoSecurity $ userRoles sys secCtxt userId
-  roles <- closeRoles secCtxt uRoles
+  roles <- closeRoles uRoles
   ePerms <- mapM (\  role ->  liftIOtoSecurity $ rolePermissions sys secCtxt role)
             roles
   return $ concat ePerms

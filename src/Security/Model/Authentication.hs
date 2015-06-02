@@ -45,11 +45,10 @@ authenticate secSystem inhSecCtxt now claim credential = do
           secCtxt = SecurityContext {
             authenticatedIdentity = Identity entity,
             authenticatedEntity = entity,
-            authenticatedThrough = credentialToMechanism credential,
+            authenticatedThrough = Just $ credentialToMechanism credential,
             authenticatedThroughAll = [credentialToMechanism credential] ++ securityContextMechanisms inhSecCtxt,
             authenticationTimestamp = now,
-            authenticationInheritedContext = inhSecCtxt,
-            roles = []
+            authenticationInheritedContext = inhSecCtxt
             }
       return $ Right secCtxt
 

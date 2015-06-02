@@ -20,6 +20,7 @@ module Security.Model.Types
         -- * Security Monad
         Security(..),
         getSecuritySystem,
+        getSecurityContext,
         raiseSecurityError,
         liftIOtoSecurity,
         -- * Basic types
@@ -68,23 +69,24 @@ import Data.Set(Set)
 import Control.Applicative
 import Control.Monad
 
-newtype Security a = Security {runSecurity :: SecuritySystem -> IO (Either SecurityError a)}
+newtype Security a = Security {runSecurity :: SecuritySystem -> SecurityContext ->
+                                              IO (Either SecurityError a)}
 
 instance Functor Security where
-  fmap f x = Security (\ sys -> do
-                          r <- runSecurity x sys
+  fmap f x = Security (\ sys ctx -> do
+                          r <- runSecurity x sys ctx
                           case r of
                             Left err -> return $ Left err
                             Right x -> return $ Right $ f x)
              
 instance Applicative Security where
-  pure x = Security (\ _ -> return $ Right x)
-  f <*> x = Security (\ sys -> do
-             f' <- runSecurity f sys
+  pure x = Security (\ _ _ -> return $ Right x)
+  f <*> x = Security (\ sys ctx -> do
+             f' <- runSecurity f sys ctx
              case f' of
                Left err -> return $ Left err
                Right f'' -> do
-                 x' <- runSecurity x sys
+                 x' <- runSecurity x sys ctx
                  case x' of
                    Left err -> return $ Left err
                    Right x'' ->
@@ -92,21 +94,24 @@ instance Applicative Security where
 
 instance Monad Security where
   return = pure
-  x >>= f = Security (\ sys -> do
-             x' <- runSecurity x sys
+  x >>= f = Security (\ sys ctx -> do
+             x' <- runSecurity x sys ctx
              case x' of
                Left err -> return $ Left err
                Right x'' ->
-                 runSecurity (f x'') sys)
+                 runSecurity (f x'') sys ctx)
 
 getSecuritySystem :: Security SecuritySystem
-getSecuritySystem = Security (\ sys -> return $ Right sys)
+getSecuritySystem = Security (\ sys _ -> return $ Right sys)
+
+getSecurityContext :: Security SecurityContext
+getSecurityContext = Security (\ _ ctx -> return $ Right ctx)
 
 raiseSecurityError :: SecurityError -> Security a
-raiseSecurityError err = Security (\ _ -> return $ Left err)
+raiseSecurityError err = Security (\ _ _ -> return $ Left err)
 
 liftIOtoSecurity :: IO (Either SecurityError a) -> Security a
-liftIOtoSecurity io = Security (\ _ -> io)
+liftIOtoSecurity io = Security (\ _ _ -> io)
 
 class SecurityBackend a where
   supportedMechanisms :: a -> [AuthenticationMechanism]
@@ -192,15 +197,24 @@ data SecurityContext
   = SecurityContext {
     authenticatedIdentity :: Identity,
     authenticatedEntity :: Entity,
-    authenticatedThrough :: AuthenticationMechanism,
+    authenticatedThrough :: Maybe AuthenticationMechanism,
     authenticatedThroughAll :: [AuthenticationMechanism],
     authenticationTimestamp :: Timestamp,
-    authenticationInheritedContext :: SecurityContext,
-    roles :: [Role]
+    authenticationInheritedContext :: SecurityContext
     }
   | SecurityContextNone
   deriving (Eq, Show)
 
+initialSecurityContext :: Timestamp -> SecurityContext
+initialSecurityContext ts = SecurityContext {
+  authenticatedIdentity = Identity EntityUnknown,
+  authenticatedEntity = EntityUnknown,
+  authenticatedThrough = Nothing,
+  authenticatedThroughAll = [],
+  authenticationTimestamp = ts,
+  authenticationInheritedContext = SecurityContextNone
+  }
+                         
 securityContextEntity :: SecurityContext -> Entity
 securityContextEntity SecurityContextNone = EntityUnknown
 securityContextEntity SecurityContext{..} = authenticatedEntity
